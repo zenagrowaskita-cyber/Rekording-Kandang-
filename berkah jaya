@@ -1,0 +1,609 @@
+import { useState, useEffect, useCallback } from "react";
+
+const SKEY = "hen-tracker-v3"; // Versi baru untuk menyimpan data intake
+async function load() { try { const r = await window.storage.get(SKEY); return r ? JSON.parse(r.value) : null; } catch { return null; } }
+async function save(d) { try { await window.storage.set(SKEY, JSON.stringify(d)); } catch (e) { console.error(e); } }
+const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+const today = () => new Date().toISOString().split("T")[0];
+const fmtDate = (d) => new Date(d).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
+const fmtN = (n, dec = 1) => (n === 0 || isNaN(n) || n === undefined) ? "—" : Number(n).toFixed(dec);
+const fmtCur = (n) => "Rp " + Number(n || 0).toLocaleString("id-ID", { minimumFractionDigits: 0 });
+const EGGS_PER_TRAY = 36;
+const INIT = { flocks: [], records: [], feedStock: [], sales: [] };
+
+const C = {
+  bg: "#F7F3ED", bg2: "#FFFCF8", card: "#FFFFFF", primary: "#C05621", primaryL: "#FCEBD5",
+  primaryD: "#8B3A0F", accent: "#E07B3C", green: "#48853C", greenL: "#E6F2E2",
+  red: "#C0392B", redL: "#FDE8E5", yellow: "#D4930E", yellowL: "#FFF6DC",
+  blue: "#2E6B9E", blueL: "#E3EFF8", text: "#2D1F14", textM: "#8C7560",
+  border: "#E6DDD0", borderL: "#F0E8DC", shadow: "0 2px 12px rgba(45,31,20,0.06)",
+};
+
+const baseBtn = { fontWeight: 700, cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 6, fontFamily: "inherit", transition: "all 0.15s", borderRadius: 10 };
+
+function Btn({ v = "p", sz = "md", children, ...props }) {
+  const bg = v === "p" ? C.primary : v === "g" ? C.green : v === "d" ? "transparent" : "transparent";
+  const clr = v === "o" ? C.textM : v === "d" ? C.red : "#fff";
+  const brd = v === "o" ? `1.5px solid ${C.border}` : v === "d" ? `1.5px solid ${C.red}40` : "none";
+  const pad = sz === "sm" ? "6px 12px" : "10px 20px";
+  const fs = sz === "sm" ? 12 : 14;
+  return <button style={{ ...baseBtn, background: bg, color: clr, border: brd, padding: pad, fontSize: fs }} {...props}>{children}</button>;
+}
+
+function Input({ label, ...props }) {
+  return (
+    <div>
+      {label && <label style={{ fontSize: 11, fontWeight: 700, color: C.textM, textTransform: "uppercase", letterSpacing: "0.6px", marginBottom: 5, display: "block" }}>{label}</label>}
+      <input style={{ padding: "9px 12px", border: `1.5px solid ${C.border}`, borderRadius: 10, fontSize: 14, color: C.text, background: C.bg2, outline: "none", width: "100%", boxSizing: "border-box", fontFamily: "inherit" }} {...props} />
+    </div>
+  );
+}
+
+function Select({ label, children, ...props }) {
+  return (
+    <div>
+      {label && <label style={{ fontSize: 11, fontWeight: 700, color: C.textM, textTransform: "uppercase", letterSpacing: "0.6px", marginBottom: 5, display: "block" }}>{label}</label>}
+      <select style={{ padding: "9px 12px", border: `1.5px solid ${C.border}`, borderRadius: 10, fontSize: 14, color: C.text, background: C.bg2, outline: "none", width: "100%", boxSizing: "border-box", fontFamily: "inherit", appearance: "auto" }} {...props}>{children}</select>
+    </div>
+  );
+}
+
+function Card({ children, style: sx, ...props }) {
+  return <div style={{ background: C.card, borderRadius: 16, border: `1px solid ${C.border}`, padding: 20, marginBottom: 14, boxShadow: C.shadow, ...sx }} {...props}>{children}</div>;
+}
+
+function Stat({ value, label, color = C.primary }) {
+  return (
+    <div style={{ background: `${color}10`, border: `1.5px solid ${color}28`, borderRadius: 12, padding: "12px 14px", textAlign: "center", flex: 1, minWidth: 90 }}>
+      <div style={{ fontSize: 22, fontWeight: 800, color, lineHeight: 1, fontFamily: "'Newsreader', Georgia, serif" }}>{value}</div>
+      <div style={{ fontSize: 10, fontWeight: 700, color: C.textM, textTransform: "uppercase", letterSpacing: "0.5px", marginTop: 4 }}>{label}</div>
+    </div>
+  );
+}
+
+function Badge({ children, color }) {
+  return <span style={{ display: "inline-block", padding: "2px 10px", borderRadius: 20, fontSize: 11, fontWeight: 700, background: `${color}18`, color }}>{children}</span>;
+}
+
+const th = { padding: "9px 10px", textAlign: "left", fontWeight: 700, fontSize: 10.5, textTransform: "uppercase", letterSpacing: "0.6px", color: C.textM, borderBottom: `2px solid ${C.border}`, background: C.bg };
+const td = { padding: "9px 10px", borderBottom: `1px solid ${C.borderL}`, fontSize: 13, verticalAlign: "middle" };
+const grid = (cols) => ({ display: "grid", gridTemplateColumns: `repeat(${cols}, 1fr)`, gap: 12 });
+
+// ━━━ FLOCK FORM ━━━
+function FlockForm({ onSave, onCancel, init }) {
+  const [f, setF] = useState({ name: init?.name || "", breed: init?.breed || "", henCount: init?.henCount || "", startDate: init?.startDate || today(), notes: init?.notes || "" });
+  const up = (k, v) => setF(p => ({ ...p, [k]: v }));
+  return (
+    <Card>
+      <h3 style={{ margin: "0 0 14px", fontSize: 17, fontWeight: 700, color: C.primaryD }}>{init ? "Edit Flock" : "Add New Flock"}</h3>
+      <div style={grid(2)}>
+        <Input label="Flock Name *" value={f.name} onChange={e => up("name", e.target.value)} placeholder="House A" />
+        <Input label="Breed" value={f.breed} onChange={e => up("breed", e.target.value)} placeholder="Isa Brown" />
+        <Input label="Number of Hens *" type="number" min="1" value={f.henCount} onChange={e => up("henCount", e.target.value)} />
+        <Input label="Start Date" type="date" value={f.startDate} onChange={e => up("startDate", e.target.value)} />
+      </div>
+      <div style={{ marginTop: 12 }}><Input label="Notes" value={f.notes} onChange={e => up("notes", e.target.value)} placeholder="Optional" /></div>
+      <div style={{ display: "flex", gap: 8, marginTop: 16, justifyContent: "flex-end" }}>
+        <Btn v="o" onClick={onCancel}>Cancel</Btn>
+        <Btn disabled={!f.name || !f.henCount} style={{ opacity: f.name && f.henCount ? 1 : 0.4 }} onClick={() => onSave({ ...f, henCount: parseInt(f.henCount) })}>{init ? "Update" : "Add Flock"}</Btn>
+      </div>
+    </Card>
+  );
+}
+
+// ━━━ RECORD FORM ━━━
+function RecordForm({ flock, onSave, onCancel, records }) {
+  const [d, setD] = useState({ date: today(), trays: "", grainEggs: "0", totalKgEggs: "", mortality: "0", feedKg: "", waterL: "", notes: "" });
+  const up = (k, v) => setD(p => ({ ...p, [k]: v }));
+
+  const totalEggs = (parseInt(d.trays) || 0) * EGGS_PER_TRAY + (parseInt(d.grainEggs) || 0);
+  const cumMort = records.filter(r => r.flockId === flock.id).reduce((s, r) => s + r.mortality, 0);
+  const liveHens = flock.henCount - cumMort;
+  const hdp = liveHens > 0 ? (totalEggs / liveHens) * 100 : 0;
+  const totalKg = parseFloat(d.totalKgEggs) || 0;
+  const eggWeight = totalEggs > 0 && totalKg > 0 ? (totalKg * 1000) / totalEggs : 0;
+  const eggMass = liveHens > 0 && eggWeight > 0 ? (hdp / 100) * eggWeight : 0;
+  
+  // NEW: Feed Intake Calculation
+  const feedKg = parseFloat(d.feedKg) || 0;
+  const feedIntake = liveHens > 0 ? (feedKg * 1000) / liveHens : 0;
+  const fcr = eggMass > 0 && feedIntake > 0 ? feedIntake / eggMass : 0;
+
+  return (
+    <Card>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
+        <Btn v="o" sz="sm" onClick={onCancel}>‹</Btn>
+        <h3 style={{ margin: 0, fontSize: 17, fontWeight: 700, color: C.primaryD }}>Daily Record — <span style={{ color: C.primary }}>{flock.name}</span></h3>
+      </div>
+
+      <div style={{ background: C.primaryL, border: `1.5px solid ${C.primary}30`, borderRadius: 12, padding: "10px 14px", marginBottom: 14, fontSize: 13, fontWeight: 700, color: C.primaryD }}>
+        🐔 Live Hens: {liveHens} (initial {flock.henCount} − mortality {cumMort})
+      </div>
+
+      {/* Egg Input */}
+      <div style={{ background: C.bg2, border: `1.5px solid ${C.accent}30`, borderRadius: 14, padding: 16, marginBottom: 14 }}>
+        <div style={{ fontSize: 14, fontWeight: 700, color: C.accent, marginBottom: 12 }}>🥚 Egg Collection</div>
+        <div style={grid(3)}>
+          <Input label="Trays (36 eggs/tray) *" type="number" min="0" value={d.trays} onChange={e => up("trays", e.target.value)} placeholder="0" />
+          <Input label="Excess / Grain Eggs" type="number" min="0" value={d.grainEggs} onChange={e => up("grainEggs", e.target.value)} placeholder="0" />
+          <Input label="Total Kg Eggs *" type="number" min="0" step="0.01" value={d.totalKgEggs} onChange={e => up("totalKgEggs", e.target.value)} placeholder="0.00" />
+        </div>
+
+        {/* Live Calculations */}
+        <div style={{ marginTop: 14, padding: "12px 16px", background: C.card, borderRadius: 12, border: `1px solid ${C.border}`, display: "flex", flexWrap: "wrap", gap: 20 }}>
+          {[
+            ["Total Eggs", totalEggs, C.primary],
+            ["HD%", fmtN(hdp) + "%", hdp >= 80 ? C.green : hdp >= 60 ? C.yellow : C.red],
+            ["Egg Weight", fmtN(eggWeight, 1) + " g", C.blue],
+            ["Feed Intake", fmtN(feedIntake, 1) + " g/hen", C.green],
+            ["FCR", fmtN(fcr, 3), C.primaryD],
+          ].map(([l, v, c]) => (
+            <div key={l}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: C.textM, textTransform: "uppercase", letterSpacing: "0.5px" }}>{l}</div>
+              <div style={{ fontSize: 18, fontWeight: 800, color: c, lineHeight: 1.2 }}>{v}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Other Inputs */}
+      <div style={grid(4)}>
+        <Input label="Date *" type="date" value={d.date} onChange={e => up("date", e.target.value)} />
+        <Input label="Feed (kg total) *" type="number" min="0" step="0.1" value={d.feedKg} onChange={e => up("feedKg", e.target.value)} placeholder="0" />
+        <Input label="Water (L)" type="number" min="0" step="0.1" value={d.waterL} onChange={e => up("waterL", e.target.value)} placeholder="0" />
+        <Input label="Mortality" type="number" min="0" value={d.mortality} onChange={e => up("mortality", e.target.value)} placeholder="0" />
+      </div>
+      <div style={{ marginTop: 12 }}><Input label="Notes" value={d.notes} onChange={e => up("notes", e.target.value)} placeholder="Health, weather, vaccination..." /></div>
+      <div style={{ display: "flex", gap: 8, marginTop: 16, justifyContent: "flex-end" }}>
+        <Btn v="o" onClick={onCancel}>Cancel</Btn>
+        <Btn disabled={d.trays === "" || !d.totalKgEggs || !d.feedKg} style={{ opacity: d.trays !== "" && d.totalKgEggs && d.feedKg ? 1 : 0.4 }}
+          onClick={() => onSave({ date: d.date, trays: parseInt(d.trays) || 0, grainEggs: parseInt(d.grainEggs) || 0, totalEggs, totalKgEggs: totalKg, mortality: parseInt(d.mortality) || 0, feedKg, feedIntake, waterL: parseFloat(d.waterL) || 0, eggWeight, eggMass, hdp, fcr, notes: d.notes })}>
+          🥚 Save Record
+        </Btn>
+      </div>
+    </Card>
+  );
+}
+
+// ━━━ RECORDS TABLE ━━━
+function RecordsTable({ flock, records, onDelete }) {
+  const recs = records.filter(r => r.flockId === flock.id).sort((a, b) => b.date.localeCompare(a.date));
+  if (!recs.length) return <div style={{ textAlign: "center", padding: 32, color: C.textM }}>No records yet.</div>;
+  return (
+    <div style={{ overflowX: "auto" }}>
+      <table style={{ width: "100%", borderCollapse: "separate", borderSpacing: 0, fontSize: 12.5 }}>
+        <thead><tr>{["Date", "Total", "Kg", "HD%", "EggWt", "Intake (g)", "FCR", "Mort", ""].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
+        <tbody>
+          {recs.map(r => {
+            const hc = r.hdp >= 80 ? C.green : r.hdp >= 60 ? C.yellow : C.red;
+            return (
+              <tr key={r.id}>
+                <td style={td}>{fmtDate(r.date)}</td>
+                <td style={{ ...td, fontWeight: 700 }}>{r.totalEggs}</td>
+                <td style={td}>{fmtN(r.totalKgEggs, 2)}</td>
+                <td style={td}><Badge color={hc}>{fmtN(r.hdp)}%</Badge></td>
+                <td style={td}>{fmtN(r.eggWeight, 1)}g</td>
+                <td style={{ ...td, color: C.green, fontWeight: 600 }}>{fmtN(r.feedIntake, 1)}</td>
+                <td style={td}>{fmtN(r.fcr, 3)}</td>
+                <td style={{ ...td, color: r.mortality > 0 ? C.red : "inherit", fontWeight: r.mortality > 0 ? 700 : 400 }}>{r.mortality || "—"}</td>
+                <td style={td}><Btn v="d" sz="sm" style={{ padding: "3px 8px" }} onClick={() => onDelete(r.id)}>✕</Btn></td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+// ━━━ FEED STOCK & SALES (Keep original logic) ━━━
+// ... [Omitted for brevity, but same as original] ...
+function FeedStockPage({ data, persistField }) {
+  const { feedStock } = data;
+  const [show, setShow] = useState(false);
+  const [f, setF] = useState({ name: "", type: "Concentrate", qty: "", pricePerUnit: "", supplier: "", date: today(), notes: "" });
+  const up = (k, v) => setF(p => ({ ...p, [k]: v }));
+  const types = ["Concentrate", "Corn", "Soybean Meal", "Rice Bran", "Fish Meal", "Premix", "Limestone", "DCP", "Salt", "Methionine", "Lysine", "Wheat Pollard", "CPO", "Other"];
+
+  const addItem = () => {
+    const item = { ...f, id: uid(), qty: parseFloat(f.qty) || 0, pricePerUnit: parseFloat(f.pricePerUnit) || 0 };
+    persistField("feedStock", [...feedStock, item]);
+    setF({ name: "", type: "Concentrate", qty: "", pricePerUnit: "", supplier: "", date: today(), notes: "" });
+    setShow(false);
+  };
+  const delItem = (id) => persistField("feedStock", feedStock.filter(i => i.id !== id));
+
+  const totalValue = feedStock.reduce((s, i) => s + i.qty * i.pricePerUnit, 0);
+  const totalQty = feedStock.reduce((s, i) => s + i.qty, 0);
+
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 10, marginBottom: 16, flexWrap: "wrap" }}>
+        <Stat value={`${fmtN(totalQty, 0)} kg`} label="Total Stock" color={C.green} />
+        <Stat value={fmtCur(totalValue)} label="Total Value" color={C.primary} />
+        <Stat value={feedStock.length} label="Items" color={C.blue} />
+        {totalQty > 0 && <Stat value={fmtCur(totalValue / totalQty)} label="Avg Price/kg" color={C.yellow} />}
+      </div>
+
+      {show ? (
+        <Card>
+          <h3 style={{ margin: "0 0 14px", fontSize: 17, fontWeight: 700, color: C.green }}>🌾 Add Feed Stock</h3>
+          <div style={grid(3)}>
+            <Input label="Feed Name *" value={f.name} onChange={e => up("name", e.target.value)} placeholder="e.g. Jagung Giling" />
+            <Select label="Type" value={f.type} onChange={e => up("type", e.target.value)}>
+              {types.map(t => <option key={t} value={t}>{t}</option>)}
+            </Select>
+            <Input label="Date Purchased" type="date" value={f.date} onChange={e => up("date", e.target.value)} />
+            <Input label="Quantity (kg) *" type="number" min="0" step="0.1" value={f.qty} onChange={e => up("qty", e.target.value)} />
+            <Input label="Price per kg (Rp) *" type="number" min="0" value={f.pricePerUnit} onChange={e => up("pricePerUnit", e.target.value)} placeholder="0" />
+            <Input label="Supplier" value={f.supplier} onChange={e => up("supplier", e.target.value)} placeholder="Optional" />
+          </div>
+          <div style={{ marginTop: 12 }}><Input label="Notes" value={f.notes} onChange={e => up("notes", e.target.value)} /></div>
+          {f.qty && f.pricePerUnit && (
+            <div style={{ marginTop: 12, padding: "10px 14px", background: C.greenL, borderRadius: 10, fontWeight: 700, color: C.green, textAlign: "center", fontSize: 16 }}>
+              Total Cost: {fmtCur((parseFloat(f.qty) || 0) * (parseFloat(f.pricePerUnit) || 0))}
+            </div>
+          )}
+          <div style={{ display: "flex", gap: 8, marginTop: 16, justifyContent: "flex-end" }}>
+            <Btn v="o" onClick={() => setShow(false)}>Cancel</Btn>
+            <Btn v="g" disabled={!f.name || !f.qty || !f.pricePerUnit} style={{ opacity: f.name && f.qty && f.pricePerUnit ? 1 : 0.4 }} onClick={addItem}>+ Add Stock</Btn>
+          </div>
+        </Card>
+      ) : (
+        <Btn v="g" onClick={() => setShow(true)}>+ Add Feed Stock</Btn>
+      )}
+
+      {feedStock.length > 0 && (
+        <Card style={{ marginTop: 14 }}>
+          <h3 style={{ margin: "0 0 14px", fontSize: 17, fontWeight: 700, color: C.primaryD }}>Feed Inventory</h3>
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "separate", borderSpacing: 0, fontSize: 12.5 }}>
+              <thead><tr>{["Date", "Name", "Type", "Qty (kg)", "Price/kg", "Total Cost", "Supplier", ""].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
+              <tbody>
+                {[...feedStock].sort((a, b) => b.date.localeCompare(a.date)).map(i => (
+                  <tr key={i.id}>
+                    <td style={td}>{fmtDate(i.date)}</td>
+                    <td style={{ ...td, fontWeight: 700 }}>{i.name}</td>
+                    <td style={td}><Badge color={C.green}>{i.type}</Badge></td>
+                    <td style={td}>{fmtN(i.qty, 1)}</td>
+                    <td style={td}>{fmtCur(i.pricePerUnit)}</td>
+                    <td style={{ ...td, fontWeight: 700 }}>{fmtCur(i.qty * i.pricePerUnit)}</td>
+                    <td style={td}>{i.supplier || "—"}</td>
+                    <td style={td}><Btn v="d" sz="sm" style={{ padding: "3px 8px" }} onClick={() => delItem(i.id)}>✕</Btn></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      )}
+    </div>
+  );
+}
+
+function SalesPage({ data, persistField }) {
+  const { sales, flocks } = data;
+  const [show, setShow] = useState(false);
+  const [f, setF] = useState({ date: today(), flockId: "", buyer: "", trays: "", grainEggs: "0", totalKg: "", pricePerKg: "", pricePerTray: "", sellBy: "kg", notes: "" });
+  const up = (k, v) => setF(p => ({ ...p, [k]: v }));
+
+  const totalEggs = (parseInt(f.trays) || 0) * EGGS_PER_TRAY + (parseInt(f.grainEggs) || 0);
+  const totalKg = parseFloat(f.totalKg) || 0;
+  const revenue = f.sellBy === "kg" ? totalKg * (parseFloat(f.pricePerKg) || 0) : (parseInt(f.trays) || 0) * (parseFloat(f.pricePerTray) || 0) + (parseInt(f.grainEggs) || 0) * ((parseFloat(f.pricePerTray) || 0) / EGGS_PER_TRAY);
+
+  const addSale = () => {
+    const item = { ...f, id: uid(), trays: parseInt(f.trays) || 0, grainEggs: parseInt(f.grainEggs) || 0, totalEggs, totalKg, pricePerKg: parseFloat(f.pricePerKg) || 0, pricePerTray: parseFloat(f.pricePerTray) || 0, revenue };
+    persistField("sales", [...sales, item]);
+    setF({ date: today(), flockId: "", buyer: "", trays: "", grainEggs: "0", totalKg: "", pricePerKg: "", pricePerTray: "", sellBy: "kg", notes: "" });
+    setShow(false);
+  };
+  const delSale = (id) => persistField("sales", sales.filter(s => s.id !== id));
+
+  const totalRevenue = sales.reduce((s, i) => s + i.revenue, 0);
+  const totalEggsSold = sales.reduce((s, i) => s + i.totalEggs, 0);
+  const totalKgSold = sales.reduce((s, i) => s + i.totalKg, 0);
+  const totalTraysSold = sales.reduce((s, i) => s + i.trays, 0);
+
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 10, marginBottom: 16, flexWrap: "wrap" }}>
+        <Stat value={fmtCur(totalRevenue)} label="Total Revenue" color={C.green} />
+        <Stat value={totalTraysSold} label="Trays Sold" color={C.primary} />
+        <Stat value={totalEggsSold.toLocaleString()} label="Eggs Sold" color={C.accent} />
+        <Stat value={`${fmtN(totalKgSold, 1)} kg`} label="Kg Sold" color={C.blue} />
+      </div>
+
+      {show ? (
+        <Card>
+          <h3 style={{ margin: "0 0 14px", fontSize: 17, fontWeight: 700, color: C.green }}>💰 Record Egg Sale</h3>
+          <div style={grid(3)}>
+            <Input label="Date *" type="date" value={f.date} onChange={e => up("date", e.target.value)} />
+            <Select label="Flock (optional)" value={f.flockId} onChange={e => up("flockId", e.target.value)}>
+              <option value="">— All —</option>
+              {flocks.map(fl => <option key={fl.id} value={fl.id}>{fl.name}</option>)}
+            </Select>
+            <Input label="Buyer" value={f.buyer} onChange={e => up("buyer", e.target.value)} placeholder="Customer name" />
+          </div>
+
+          <div style={{ background: C.bg2, border: `1.5px solid ${C.accent}30`, borderRadius: 14, padding: 14, marginTop: 12 }}>
+            <div style={{ fontSize: 14, fontWeight: 700, color: C.accent, marginBottom: 10 }}>🥚 Eggs Sold</div>
+            <div style={grid(3)}>
+              <Input label="Trays (36/tray) *" type="number" min="0" value={f.trays} onChange={e => up("trays", e.target.value)} placeholder="0" />
+              <Input label="Grain / Excess" type="number" min="0" value={f.grainEggs} onChange={e => up("grainEggs", e.target.value)} placeholder="0" />
+              <Input label="Total Kg Eggs" type="number" min="0" step="0.01" value={f.totalKg} onChange={e => up("totalKg", e.target.value)} placeholder="0.00" />
+            </div>
+            <div style={{ marginTop: 8, fontSize: 13, color: C.textM }}>Total Eggs: <strong style={{ color: C.primary, fontSize: 16 }}>{totalEggs}</strong></div>
+          </div>
+
+          <div style={{ background: C.bg2, border: `1.5px solid ${C.green}30`, borderRadius: 14, padding: 14, marginTop: 12 }}>
+            <div style={{ fontSize: 14, fontWeight: 700, color: C.green, marginBottom: 10 }}>💵 Pricing</div>
+            <div style={grid(3)}>
+              <Select label="Sell By" value={f.sellBy} onChange={e => up("sellBy", e.target.value)}>
+                <option value="kg">Per Kg</option>
+                <option value="tray">Per Tray</option>
+              </Select>
+              {f.sellBy === "kg"
+                ? <Input label="Price / kg (Rp) *" type="number" min="0" value={f.pricePerKg} onChange={e => up("pricePerKg", e.target.value)} placeholder="0" />
+                : <Input label="Price / Tray (Rp) *" type="number" min="0" value={f.pricePerTray} onChange={e => up("pricePerTray", e.target.value)} placeholder="0" />
+              }
+              <div style={{ display: "flex", alignItems: "flex-end" }}>
+                <div style={{ padding: "10px 14px", background: C.greenL, borderRadius: 10, fontWeight: 800, color: C.green, fontSize: 18, width: "100%", textAlign: "center", fontFamily: "'Newsreader', Georgia, serif" }}>
+                  {fmtCur(revenue)}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div style={{ marginTop: 12 }}><Input label="Notes" value={f.notes} onChange={e => up("notes", e.target.value)} /></div>
+          <div style={{ display: "flex", gap: 8, marginTop: 16, justifyContent: "flex-end" }}>
+            <Btn v="o" onClick={() => setShow(false)}>Cancel</Btn>
+            <Btn v="g" disabled={!f.trays || revenue <= 0} style={{ opacity: f.trays && revenue > 0 ? 1 : 0.4 }} onClick={addSale}>💰 Record Sale</Btn>
+          </div>
+        </Card>
+      ) : (
+        <Btn v="g" onClick={() => setShow(true)}>+ Record Egg Sale</Btn>
+      )}
+
+      {sales.length > 0 && (
+        <Card style={{ marginTop: 14 }}>
+          <h3 style={{ margin: "0 0 14px", fontSize: 17, fontWeight: 700, color: C.primaryD }}>Sales History</h3>
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "separate", borderSpacing: 0, fontSize: 12.5 }}>
+              <thead><tr>{["Date", "Flock", "Buyer", "Trays", "Grain", "Eggs", "Kg", "Price", "Revenue", ""].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
+              <tbody>
+                {[...sales].sort((a, b) => b.date.localeCompare(a.date)).map(s => {
+                  const fl = flocks.find(x => x.id === s.flockId);
+                  return (
+                    <tr key={s.id}>
+                      <td style={td}>{fmtDate(s.date)}</td>
+                      <td style={td}>{fl?.name || "All"}</td>
+                      <td style={td}>{s.buyer || "—"}</td>
+                      <td style={td}>{s.trays}</td>
+                      <td style={td}>{s.grainEggs || "—"}</td>
+                      <td style={{ ...td, fontWeight: 700 }}>{s.totalEggs}</td>
+                      <td style={td}>{fmtN(s.totalKg, 2)}</td>
+                      <td style={td}>{s.sellBy === "kg" ? `${fmtCur(s.pricePerKg)}/kg` : `${fmtCur(s.pricePerTray)}/tray`}</td>
+                      <td style={{ ...td, fontWeight: 800, color: C.green }}>{fmtCur(s.revenue)}</td>
+                      <td style={td}><Btn v="d" sz="sm" style={{ padding: "3px 8px" }} onClick={() => delSale(s.id)}>✕</Btn></td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      )}
+    </div>
+  );
+}
+
+// ━━━ ANALYTICS ━━━
+function AnalyticsPage({ data }) {
+  const { flocks, records, feedStock, sales } = data;
+  if (!flocks.length) return <Card><div style={{ textAlign: "center", padding: 40, color: C.textM }}><p style={{ fontSize: 40 }}>📊</p><p style={{ fontWeight: 700 }}>Add flocks to see analytics</p></div></Card>;
+
+  const summaries = flocks.map(f => {
+    const recs = records.filter(r => r.flockId === f.id);
+    const totalEggs = recs.reduce((s, r) => s + r.totalEggs, 0);
+    const totalKg = recs.reduce((s, r) => s + r.totalKgEggs, 0);
+    const totalFeed = recs.reduce((s, r) => s + r.feedKg, 0);
+    const totalMort = recs.reduce((s, r) => s + r.mortality, 0);
+    const avgHdp = recs.length ? recs.reduce((s, r) => s + r.hdp, 0) / recs.length : 0;
+    const avgIntake = recs.filter(r => r.feedIntake > 0).length ? recs.filter(r => r.feedIntake > 0).reduce((s, r) => s + r.feedIntake, 0) / recs.filter(r => r.feedIntake > 0).length : 0;
+    const avgFcr = recs.filter(r => r.fcr > 0).length ? recs.filter(r => r.fcr > 0).reduce((s, r) => s + r.fcr, 0) / recs.filter(r => r.fcr > 0).length : 0;
+    const avgEggWt = recs.filter(r => r.eggWeight > 0).length ? recs.filter(r => r.eggWeight > 0).reduce((s, r) => s + r.eggWeight, 0) / recs.filter(r => r.eggWeight > 0).length : 0;
+    return { ...f, totalEggs, totalKg, totalFeed, totalMort, currentHens: f.henCount - totalMort, avgHdp, avgIntake, avgFcr, avgEggWt, days: recs.length };
+  });
+
+  const totalRevenue = sales.reduce((s, i) => s + i.revenue, 0);
+  const totalFeedCost = feedStock.reduce((s, i) => s + i.qty * i.pricePerUnit, 0);
+  const margin = totalRevenue - totalFeedCost;
+
+  return (
+    <div>
+      <Card>
+        <h3 style={{ margin: "0 0 14px", fontSize: 17, fontWeight: 700, color: C.primaryD }}>🏠 Farm Overview</h3>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+          <Stat value={summaries.reduce((s, f) => s + f.totalEggs, 0).toLocaleString()} label="Total Eggs" color={C.primary} />
+          <Stat value={summaries.reduce((s, f) => s + f.currentHens, 0)} label="Live Hens" color={C.green} />
+          <Stat value={`${fmtN(summaries.reduce((s, f) => s + f.totalKg, 0), 1)} kg`} label="Egg Kg" color={C.accent} />
+          <Stat value={fmtCur(totalRevenue)} label="Revenue" color={C.blue} />
+          <Stat value={fmtCur(totalFeedCost)} label="Feed Cost" color={C.red} />
+          <Stat value={fmtCur(margin)} label={margin >= 0 ? "Profit" : "Loss"} color={margin >= 0 ? C.green : C.red} />
+        </div>
+      </Card>
+      <Card>
+        <h3 style={{ margin: "0 0 14px", fontSize: 17, fontWeight: 700, color: C.primaryD }}>Flock Comparison</h3>
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "separate", borderSpacing: 0, fontSize: 12 }}>
+            <thead><tr>{["Flock", "Hens", "Days", "Avg HD%", "Intake (g)", "Avg FCR", "Mort"].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
+            <tbody>
+              {summaries.map(f => (
+                <tr key={f.id}>
+                  <td style={{ ...td, fontWeight: 700 }}>{f.name}</td>
+                  <td style={td}>{f.currentHens}/{f.henCount}</td>
+                  <td style={td}>{f.days}</td>
+                  <td style={td}><Badge color={f.avgHdp >= 80 ? C.green : f.avgHdp >= 60 ? C.yellow : C.red}>{fmtN(f.avgHdp)}%</Badge></td>
+                  <td style={{ ...td, color: C.green, fontWeight: 700 }}>{fmtN(f.avgIntake, 1)}g</td>
+                  <td style={td}>{fmtN(f.avgFcr, 3)}</td>
+                  <td style={td}><Badge color={f.totalMort > 0 ? C.red : C.green}>{f.totalMort} ({fmtN((f.totalMort / f.henCount) * 100)}%)</Badge></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+// ━━━ MAIN ━━━
+export default function App() {
+  const [data, setData] = useState(INIT);
+  const [loading, setLoading] = useState(true);
+  const [tab, setTab] = useState("flocks");
+  const [showFlockForm, setShowFlockForm] = useState(false);
+  const [editFlock, setEditFlock] = useState(null);
+  const [activeFlock, setActiveFlock] = useState(null);
+  const [showRecordForm, setShowRecordForm] = useState(false);
+  const [confirmDel, setConfirmDel] = useState(null);
+
+  useEffect(() => { load().then(d => { if (d) setData({ ...INIT, ...d }); setLoading(false); }); }, []);
+
+  const persistField = useCallback((key, val) => {
+    setData(prev => { const next = { ...prev, [key]: val }; save(next); return next; });
+  }, []);
+
+  const { flocks, records } = data;
+  const addFlock = (f) => { persistField("flocks", [...flocks, { ...f, id: uid(), createdAt: new Date().toISOString() }]); setShowFlockForm(false); };
+  const updateFlock = (f) => { persistField("flocks", flocks.map(fl => fl.id === editFlock.id ? { ...fl, ...f } : fl)); setEditFlock(null); };
+  const deleteFlock = (id) => { persistField("flocks", flocks.filter(f => f.id !== id)); persistField("records", records.filter(r => r.flockId !== id)); setConfirmDel(null); if (activeFlock?.id === id) setActiveFlock(null); };
+  const addRecord = (r) => { persistField("records", [...records, { ...r, id: uid(), flockId: activeFlock.id }]); setShowRecordForm(false); };
+  const deleteRecord = (id) => persistField("records", records.filter(r => r.id !== id));
+
+  const exportCSV = () => {
+    const h = "Flock,Breed,Date,Trays,GrainEggs,TotalEggs,TotalKg,HD%,EggWt(g),Intake(g),Feed(kg),FCR,Mortality,Notes";
+    const rows = records.sort((a, b) => a.date.localeCompare(b.date)).map(r => {
+      const f = flocks.find(fl => fl.id === r.flockId);
+      return `"${f?.name || ""}","${f?.breed || ""}",${r.date},${r.trays},${r.grainEggs},${r.totalEggs},${r.totalKgEggs},${fmtN(r.hdp)},${fmtN(r.eggWeight)},${fmtN(r.feedIntake)},${r.feedKg},${fmtN(r.fcr, 3)},${r.mortality},"${r.notes || ""}"`;
+    });
+    const blob = new Blob([[h, ...rows].join("\n")], { type: "text/csv" });
+    const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `hen-records-${today()}.csv`; a.click();
+  };
+
+  if (loading) return <div style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: "60vh", fontFamily: "'Newsreader', Georgia, serif" }}><div style={{ textAlign: "center" }}><div style={{ fontSize: 48 }}>🥚</div><div style={{ fontWeight: 700, marginTop: 8 }}>Loading...</div></div></div>;
+
+  return (
+    <div style={{ fontFamily: "'Newsreader', 'Lora', Georgia, serif", background: C.bg, minHeight: "100vh", color: C.text, maxWidth: 960, margin: "0 auto", padding: "12px 16px" }}>
+      <link href="https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,400;6..72,600;6..72,700;6..72,800&display=swap" rel="stylesheet" />
+
+      {/* Header */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 0 10px", borderBottom: `2.5px solid ${C.primary}`, marginBottom: 2 }}>
+        <div>
+          <div style={{ fontSize: 22, fontWeight: 800, color: C.primaryD, letterSpacing: "-0.5px" }}>🐔 Hen Tracker v3</div>
+          <div style={{ fontSize: 11.5, color: C.textM, fontWeight: 400 }}>Egg production · Feed intake · Sales</div>
+        </div>
+        {records.length > 0 && <Btn v="o" sz="sm" onClick={exportCSV}>↓ CSV</Btn>}
+      </div>
+
+      {/* Tabs */}
+      <div style={{ display: "flex", borderBottom: `1px solid ${C.border}`, marginBottom: 16, overflowX: "auto" }}>
+        {[["flocks", "🐔 Flocks"], ["feed", "🌾 Feed Stock"], ["sales", "💰 Egg Sales"], ["analytics", "📊 Analytics"]].map(([k, l]) => (
+          <button key={k} style={{ padding: "10px 18px", border: "none", borderBottom: tab === k ? `3px solid ${C.primary}` : "3px solid transparent", background: "transparent", color: tab === k ? C.primary : C.textM, fontWeight: 700, fontSize: 14, cursor: "pointer", fontFamily: "inherit" }}
+            onClick={() => { setTab(k); setActiveFlock(null); setShowFlockForm(false); setEditFlock(null); setShowRecordForm(false); }}>{l}</button>
+        ))}
+      </div>
+
+      {/* FLOCKS LIST */}
+      {tab === "flocks" && !activeFlock && (
+        <>
+          {showFlockForm && !editFlock && <FlockForm onSave={addFlock} onCancel={() => setShowFlockForm(false)} />}
+          {editFlock && <FlockForm init={editFlock} onSave={updateFlock} onCancel={() => setEditFlock(null)} />}
+          {!showFlockForm && !editFlock && <Btn onClick={() => setShowFlockForm(true)}>+ Add Flock</Btn>}
+          {flocks.length === 0 && !showFlockForm ? (
+            <Card style={{ textAlign: "center", padding: 48, marginTop: 20 }}><div style={{ fontSize: 56 }}>🏠</div><p style={{ fontWeight: 700, fontSize: 18, marginTop: 12, color: C.primaryD }}>No flocks yet</p><p style={{ color: C.textM }}>Create your first flock to begin recording.</p></Card>
+          ) : (
+            <div style={{ marginTop: 14, display: "grid", gap: 12 }}>
+              {flocks.map(f => {
+                const recs = records.filter(r => r.flockId === f.id);
+                const totalMort = recs.reduce((s, r) => s + r.mortality, 0);
+                const totalEggs = recs.reduce((s, r) => s + r.totalEggs, 0);
+                const last = [...recs].sort((a, b) => b.date.localeCompare(a.date))[0];
+                return (
+                  <Card key={f.id} style={{ cursor: "pointer", transition: "box-shadow 0.2s" }} onClick={() => setActiveFlock(f)}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                      <div>
+                        <div style={{ fontSize: 18, fontWeight: 800, color: C.primaryD }}>{f.name}</div>
+                        <div style={{ fontSize: 12, color: C.textM }}>{f.breed && `${f.breed} · `}{f.henCount - totalMort} live hens · {recs.length} records</div>
+                      </div>
+                      <div style={{ display: "flex", gap: 6 }} onClick={e => e.stopPropagation()}>
+                        <Btn v="o" sz="sm" onClick={() => setEditFlock(f)}>Edit</Btn>
+                        {confirmDel === f.id ? (
+                          <><Btn v="d" sz="sm" onClick={() => deleteFlock(f.id)}>Yes</Btn><Btn v="o" sz="sm" onClick={() => setConfirmDel(null)}>No</Btn></>
+                        ) : (
+                          <Btn v="d" sz="sm" onClick={() => setConfirmDel(f.id)}>✕</Btn>
+                        )}
+                      </div>
+                    </div>
+                    <div style={{ display: "flex", gap: 20, marginTop: 10, flexWrap: "wrap", alignItems: "baseline" }}>
+                      <div><span style={{ fontSize: 22, fontWeight: 800, color: C.primary }}>{totalEggs.toLocaleString()}</span><span style={{ fontSize: 11, color: C.textM, marginLeft: 4 }}>eggs</span></div>
+                      {last && <div><span style={{ fontSize: 11, color: C.textM }}>Last Intake: </span><span style={{ fontWeight: 700, color: C.green }}>{fmtN(last.feedIntake)}g</span></div>}
+                      {last && <div><span style={{ fontSize: 11, color: C.textM }}>Last HD%: </span><span style={{ fontWeight: 700, color: last.hdp >= 80 ? C.green : last.hdp >= 60 ? C.yellow : C.red }}>{fmtN(last.hdp)}%</span></div>}
+                    </div>
+                  </Card>
+                );
+              })}
+            </div>
+          )}
+        </>
+      )}
+
+      {/* FLOCK DETAIL */}
+      {tab === "flocks" && activeFlock && (
+        <>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
+            <Btn v="o" sz="sm" onClick={() => { setActiveFlock(null); setShowRecordForm(false); }}>‹</Btn>
+            <h2 style={{ margin: 0, fontSize: 20, fontWeight: 800, color: C.primaryD }}>{activeFlock.name}</h2>
+            <span style={{ fontSize: 12, color: C.textM }}>{activeFlock.breed && `${activeFlock.breed} · `}{activeFlock.henCount} initial</span>
+          </div>
+          {(() => {
+            const recs = records.filter(r => r.flockId === activeFlock.id);
+            const totalMort = recs.reduce((s, r) => s + r.mortality, 0);
+            const liveHens = activeFlock.henCount - totalMort;
+            const totalEggs = recs.reduce((s, r) => s + r.totalEggs, 0);
+            const totalKg = recs.reduce((s, r) => s + r.totalKgEggs, 0);
+            const avgHdp = recs.length ? recs.reduce((s, r) => s + r.hdp, 0) / recs.length : 0;
+            const avg = (arr, key) => { const v = arr.filter(r => r[key] > 0); return v.length ? v.reduce((s, r) => s + r[key], 0) / v.length : 0; };
+            return (
+              <Card>
+                <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                  <Stat value={`${fmtN(avgHdp)}%`} label="Avg HD%" color={C.primary} />
+                  <Stat value={liveHens} label="Live Hens" color={C.green} />
+                  <Stat value={fmtN(avg(recs, "feedIntake"), 1) + "g"} label="Avg Intake" color={C.green} />
+                  <Stat value={totalEggs.toLocaleString()} label="Total Eggs" color={C.accent} />
+                  <Stat value={`${fmtN(avg(recs, "eggWeight"), 1)}g`} label="Avg Egg Wt" color={C.yellow} />
+                  <Stat value={fmtN(avg(recs, "fcr"), 3)} label="Avg FCR" color={C.primaryD} />
+                  <Stat value={totalMort} label="Mortality" color={C.red} />
+                </div>
+              </Card>
+            );
+          })()}
+          {showRecordForm
+            ? <RecordForm flock={activeFlock} records={records} onSave={addRecord} onCancel={() => setShowRecordForm(false)} />
+            : <Btn style={{ marginBottom: 14 }} onClick={() => setShowRecordForm(true)}>+ Add Daily Record</Btn>
+          }
+          <Card>
+            <h3 style={{ margin: "0 0 14px", fontSize: 17, fontWeight: 700, color: C.primaryD }}>Daily Records</h3>
+            <RecordsTable flock={activeFlock} records={records} onDelete={deleteRecord} />
+          </Card>
+        </>
+      )}
+
+      {tab === "feed" && <FeedStockPage data={data} persistField={persistField} />}
+      {tab === "sales" && <SalesPage data={data} persistField={persistField} />}
+      {tab === "analytics" && <AnalyticsPage data={data} />}
+
+      <div style={{ textAlign: "center", padding: "20px 0 8px", fontSize: 11, color: C.textM }}>Hen Performance Tracker v3.0 · Feed Intake = (Total Feed g / Live Hens)</div>
+    </div>
+  );
+}
